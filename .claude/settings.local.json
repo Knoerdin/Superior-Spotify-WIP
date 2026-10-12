@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:developer.spotify.com)",
+      "WebFetch(domain:spotifynewsroom.jp)",
+      "WebFetch(domain:www.musicbusinessworldwide.com)",
+      "WebFetch(domain:blog.ethanrosenthal.com)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:ethanrosenthal.com)",
+      "WebFetch(domain:last.fm)",
+      "WebFetch(domain:www.last.fm)",
+      "WebFetch(domain:www.parascho.com)",
+      "WebFetch(domain:www.reddit.com)",
+      "WebFetch(domain:apimagick.com)",
+      "WebFetch(domain:www.kaggle.com)",
+      "WebFetch(domain:engineering.atspotify.com)",
+      "WebFetch(domain:towardsdatascience.com)",
+      "WebFetch(domain:www.digitaltrends.com)"
+    ]
+  }
+}
