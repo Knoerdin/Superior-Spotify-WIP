@@ -16,7 +16,15 @@
       "WebFetch(domain:www.kaggle.com)",
       "WebFetch(domain:engineering.atspotify.com)",
       "WebFetch(domain:towardsdatascience.com)",
-      "WebFetch(domain:www.digitaltrends.com)"
+      "WebFetch(domain:www.digitaltrends.com)",
+      "Bash(omlx --version)",
+      "Bash(omlx launch *)",
+      "Bash(omlx --help)",
+      "Bash(omlx status *)",
+      "Bash(omlx-server status *)",
+      "Bash(gh auth *)",
+      "Bash(gh repo *)",
+      "Bash(mlx_lm list *)"
     ]
   }
 }

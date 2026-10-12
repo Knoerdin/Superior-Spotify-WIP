@@ -95,7 +95,7 @@ Spotify provides **11 audio features** for every track. These form the embedding
 
 ### Feature Vector Representation
 
-A track is represented as a 11-dimensional vector:
+A track is represented as an 11-dimensional vector:
 
 ```
 track_vector = [
@@ -347,7 +347,7 @@ def diversity_bonus(track, recent_history, window_minutes=60):
     album_penalty = 0.0
 
     for recent_track in recent_history:
-        time_diff = (recent_played_at - track.played_at).total_seconds() / 60
+        time_diff = (recent_track.played_at - track.played_at).total_seconds() / 60
 
         if time_diff > window_minutes:
             break
@@ -391,7 +391,7 @@ def recency_bonus(track_last_played, current_time):
 
 #### 5. Exploration Bonus (weight: ε = 0.05)
 
-Bonus for discovering new tracks (Ucb1-style exploration).
+Bonus for discovering new tracks (UCB1-style exploration).
 
 ```python
 def exploration_bonus(track_id, user_id, total_plays):
@@ -491,7 +491,644 @@ def weighted_selection(tracks_with_scores, temperature=1.0):
     probs = softmax(scaled_scores)
 
     # Weighted random choice
-    selected_idx = np.random.choice(len(tracks_with_scores), p=prob
+    selected_idx = np.random.choice(len(tracks_with_scores), p=probs)
+    return tracks_with_scores[selected_idx]
 ```
 
-[... truncated for brevity ...]
+---
+
+## ML Techniques
+
+### Content-Based Similarity
+
+The foundation of Smart Shuffle is content-based filtering using audio features:
+
+**Characteristics:**
+- **Fast & Explainable**: "Similar to [track] you liked" is easily justified
+- **Cold-Start Friendly**: New songs can be recommended immediately
+- **No User Data Required**: Works from day one
+
+**Implementation Pattern:**
+1. Fetch audio features from Spotify API
+2. Cache in local database (features don't change)
+3. Compute cosine similarity against target or user profile
+
+### Collaborative Filtering Approach
+
+As user data accumulates, collaborative filtering can supplement content-based methods:
+
+**Item-Item Collaborative Filtering:**
+```
+"Users who liked X also liked Y"
+```
+
+**Implementation:**
+- Build co-occurrence matrix from listening events
+- Compute conditional probabilities P(like Y | liked X)
+- Pre-compute recommendations offline via Celery jobs
+
+**Matrix Factorization (Future Enhancement):**
+- Use **implicit** library for ALS (Alternating Least Squares)
+- Requires significant user interaction data
+- Captures latent taste factors beyond audio features
+
+### Multi-Armed Bandit for Exploration
+
+Balance exploitation (playing what user likes) with exploration (discovery):
+
+**Epsilon-Greedy Strategy:**
+```python
+def epsilon_greedy_selection(candidates, epsilon=0.1):
+    """
+    With epsilon probability, choose randomly (explore).
+    Otherwise, choose highest score (exploit).
+    """
+    if random.random() < epsilon:
+        return random.choice(candidates)
+    return max(candidates, key=lambda t: t.score)
+```
+
+**Thompson Sampling (Advanced):**
+- Maintain Beta distribution for each track's "like" probability
+- Sample from distribution, select highest
+- Automatically balances exploration/exploitation
+
+---
+
+## Diversity Layer
+
+### Maximal Marginal Relevance (MMR) Re-Ranking
+
+MMR balances relevance with diversity in ranked results:
+
+```python
+def mmr_re_rank(
+    ranked_tracks,
+    selected_tracks,
+    lambda_param=0.7
+):
+    """
+    Re-rank tracks using MMR to maximize relevance-diversity tradeoff.
+
+    MMR score = λ * relevance(track) - (1-λ) * max_similarity(track, selected)
+
+    Args:
+        ranked_tracks: Initially ranked tracks by relevance
+        selected_tracks: Already selected tracks (for diversity check)
+        lambda_param: 1.0 = pure relevance, 0.0 = pure diversity
+
+    Returns:
+        Re-ranked list favoring diversity
+    """
+    mmr_scores = []
+
+    for track in ranked_tracks:
+        if track in selected_tracks:
+            mmr_scores.append((track, -float('inf')))  # Already selected
+            continue
+
+        relevance = track.score  # Original relevance score
+
+        # Max similarity to already selected tracks
+        max_sim = 0.0
+        for selected in selected_tracks:
+            sim = cosine_similarity(track.features, selected.features)
+            max_sim = max(max_sim, sim)
+
+        mmr_score = lambda_param * relevance - (1 - lambda_param) * max_sim
+        mmr_scores.append((track, mmr_score))
+
+    # Sort by MMR score descending
+    mmr_scores.sort(key=lambda x: x[1], reverse=True)
+    return [t for t, s in mmr_scores]
+```
+
+### Artist and Genre Spread
+
+**Hard Constraints:**
+```python
+def enforce_artist_diversity(tracks, max_consecutive_same_artist=1):
+    """
+    Ensure no more than N consecutive tracks from same artist.
+    """
+    result = []
+    artist_counts = {}
+
+    for track in tracks:
+        artist = track.artist_id
+
+        # Count recent consecutive from same artist
+        recent_same_artist = sum(
+            1 for t in result[-max_consecutive_same_artist:]
+            if t.artist_id == artist
+        )
+
+        if recent_same_artist < max_consecutive_same_artist:
+            result.append(track)
+            artist_counts[artist] = artist_counts.get(artist, 0) + 1
+
+    return result
+```
+
+**Soft Diversity Scoring:**
+```python
+def calculate_artist_diversity_score(history, candidate):
+    """
+    Calculate diversity bonus based on artist distribution in history.
+    Higher score if artist is underrepresented.
+    """
+    total_tracks = len(history)
+    if total_tracks == 0:
+        return 1.0  # No history, full bonus
+
+    artist_count = sum(
+        1 for t in history if t.artist_id == candidate.artist_id
+    )
+
+    # Expected frequency if perfectly uniform
+    unique_artists = len(set(t.artist_id for t in history))
+    expected_freq = 1.0 / max(unique_artists, 1)
+
+    actual_freq = artist_count / total_tracks
+
+    # Bonus if underrepresented, penalty if overrepresented
+    if actual_freq < expected_freq:
+        return 1.0 + (expected_freq - actual_freq) * 2
+    else:
+        return 1.0 / (1 + (actual_freq - expected_freq) * 2)
+```
+
+### Session-Based Filtering
+
+Adjust scoring based on listening session context:
+
+```python
+def get_context_multiplier(context_type):
+    """
+    Adjust feature weights based on session context.
+    """
+    context_multipliers = {
+        'workout': {
+            'energy': 1.5,      # Prioritize high energy
+            'tempo': 1.3,       # Prioritize faster tempo
+            'valence': 1.1,     # Slightly favor positive
+        },
+        'focus': {
+            'instrumentalness': 1.5,  # Prioritize instrumental
+            'speechiness': 0.5,       # Deprioritize spoken word
+            'energy': 0.8,            # Moderate energy
+        },
+        'chill': {
+            'acousticness': 1.3,      # More acoustic
+            'energy': 0.7,            # Lower energy
+            'valence': 0.9,           # Neutral to positive
+        },
+        'party': {
+            'danceability': 1.5,      # Highly danceable
+            'valence': 1.3,           # Positive mood
+            'energy': 1.2,            # High energy
+        }
+    }
+    return context_multipliers.get(context_type, {})
+```
+
+---
+
+## Implementation Recommendations
+
+### Technology Stack
+
+**Primary Stack (per planning docs):**
+- **Language**: Python 3.10+
+- **ML Library**: scikit-learn 1.0+
+- **Data Manipulation**: pandas, numpy
+- **Web Framework**: FastAPI
+- **Database**: PostgreSQL
+
+### Project Structure Recommendation
+
+```
+superior-spotify/
+├── src/
+│   ├── ml/
+│   │   ├── __init__.py
+│   │   ├── similarity.py       # Cosine similarity functions
+│   │   ├── scoring.py          # Smart shuffle scoring
+│   │   ├── diversity.py        # MMR, diversity calculations
+│   │   ├── profile.py          # User audio profile calculation
+│   │   └── recommendations.py  # Recommendation pipeline
+│   ├── api/
+│   │   ├── endpoints/
+│   │   │   ├── tracks.py
+│   │   │   └── recommendations.py
+│   └── core/
+│       └── config.py
+├── tests/
+│   └── ml/
+│       ├── test_similarity.py
+│       └── test_scoring.py
+├── requirements.txt
+└── main.py
+```
+
+### Key Dependencies
+
+**requirements.txt:**
+```
+# Web framework
+fastapi>=0.100.0
+uvicorn>=0.23.0
+
+# Database
+sqlalchemy>=2.0.0
+asyncpg>=0.28.0
+
+# ML & Data
+scikit-learn>=1.3.0
+numpy>=1.24.0
+pandas>=2.0.0
+
+# Spotify API
+spotipy>=2.23.0
+
+# Caching
+redis>=4.6.0
+
+# Background tasks
+celery>=5.3.0
+```
+
+### Core ML Module Example
+
+**src/ml/similarity.py:**
+```python
+"""Audio feature similarity calculations."""
+from typing import List, Tuple, Dict
+import numpy as np
+from sklearn.metrics.pairwise import cosine_similarity
+
+# Default audio feature weights for similarity
+DEFAULT_FEATURE_WEIGHTS = np.array([
+    1.2,  # danceability
+    1.1,  # energy
+    1.3,  # valence
+    0.8,  # acousticness
+    0.7,  # instrumentalness
+    0.5,  # liveness
+    0.6,  # speechiness
+    1.0,  # tempo (normalized)
+    0.5,  # loudness (normalized)
+    0.8,  # mode
+    0.7   # key (normalized)
+])
+
+
+def normalize_features(features: Dict[str, float]) -> np.ndarray:
+    """
+    Normalize raw Spotify audio features to 0-1 scale.
+
+    Args:
+        features: Raw audio features from Spotify API
+
+    Returns:
+        Normalized feature vector (11,)
+    """
+    return np.array([
+        features['danceability'],
+        features['energy'],
+        features['valence'],
+        features['acousticness'],
+        features['instrumentalness'],
+        features['liveness'],
+        features['speechiness'],
+        features['tempo'] / 200,  # Normalize: 0-200 BPM -> 0-1
+        (features['loudness'] + 60) / 60,  # Normalize: -60 to 0 dB -> 0-1
+        features['mode'],
+        features['key'] / 11  # Normalize: 0-11 -> 0-1
+    ])
+
+
+def cosine_similarity_tracks(
+    features_a: Dict[str, float],
+    features_b: Dict[str, float],
+    weights: np.ndarray = None
+) -> float:
+    """
+    Calculate cosine similarity between two tracks' audio features.
+
+    Args:
+        features_a: Audio features for track A
+        features_b: Audio features for track B
+        weights: Optional feature weights
+
+    Returns:
+        Similarity score (0 to 1)
+    """
+    vec_a = normalize_features(features_a)
+    vec_b = normalize_features(features_b)
+
+    if weights is not None:
+        vec_a = vec_a * weights
+        vec_b = vec_b * weights
+
+    return float(cosine_similarity(
+        vec_a.reshape(1, -1),
+        vec_b.reshape(1, -1)
+    )[0][0])
+
+
+def find_similar_tracks(
+    target_features: Dict[str, float],
+    candidate_features: List[Dict[str, float]],
+    candidate_ids: List[str],
+    n_results: int = 10
+) -> List[Tuple[str, float]]:
+    """
+    Find the n most similar tracks to a target.
+
+    Args:
+        target_features: Target track audio features
+        candidate_features: List of candidate track features
+        candidate_ids: List of candidate track IDs
+        n_results: Number of results to return
+
+    Returns:
+        List of (track_id, similarity) tuples
+    """
+    # Normalize all features
+    target_vec = normalize_features(target_features).reshape(1, -1)
+    candidate_vecs = np.array([
+        normalize_features(f) for f in candidate_features
+    ])
+
+    # Calculate similarities
+    similarities = cosine_similarity(target_vec, candidate_vecs)[0]
+
+    # Get top n
+    top_indices = similarities.argsort()[-n_results:][::-1]
+
+    return [
+        (candidate_ids[i], float(similarities[i]))
+        for i in top_indices
+    ]
+```
+
+**src/ml/scoring.py:**
+```python
+"""Smart shuffle scoring algorithm."""
+from dataclasses import dataclass
+from datetime import datetime
+from typing import List, Optional
+import math
+
+@dataclass
+class TrackScoreComponents:
+    """Individual score components for a track."""
+    play_frequency: float
+    audio_similarity: float
+    diversity_bonus: float
+    recency_bonus: float
+    exploration_bonus: float
+    total_score: float
+
+
+class SmartShuffleScorer:
+    """Calculate smart shuffle scores for tracks."""
+
+    # Default weights (tunable)
+    WEIGHT_PLAY_FREQUENCY = 0.35
+    WEIGHT_AUDIO_SIMILARITY = 0.30
+    WEIGHT_DIVERSITY = 0.20
+    WEIGHT_RECENCY = 0.10
+    WEIGHT_EXPLORATION = 0.05
+
+    def __init__(
+        self,
+        user_profile: np.ndarray,
+        recent_history: List['Track'],
+        db_connection=None,
+        current_time: datetime = None
+    ):
+        self.user_profile = user_profile
+        self.recent_history = recent_history
+        self.db = db_connection
+        self.current_time = current_time or datetime.now()
+
+    def calculate_score(self, track) -> TrackScoreComponents:
+        """Calculate all score components for a track."""
+        play_freq = self._play_frequency_score(track.id)
+        audio_sim = self._audio_similarity(track)
+        diversity = self._diversity_bonus(track)
+        recency = self._recency_bonus(track)
+        exploration = self._exploration_bonus(track.id)
+
+        total = (
+            self.WEIGHT_PLAY_FREQUENCY * play_freq +
+            self.WEIGHT_AUDIO_SIMILARITY * audio_sim +
+            self.WEIGHT_DIVERSITY * diversity +
+            self.WEIGHT_RECENCY * recency +
+            self.WEIGHT_EXPLORATION * exploration
+        )
+
+        return TrackScoreComponents(
+            play_frequency=play_freq,
+            audio_similarity=audio_sim,
+            diversity_bonus=diversity,
+            recency_bonus=recency,
+            exploration_bonus=exploration,
+            total_score=total
+        )
+
+    def _audio_similarity(self, track) -> float:
+        """Calculate audio similarity to user profile."""
+        from .similarity import normalize_features
+        track_vec = normalize_features(track.audio_features)
+        return float(cosine_similarity(
+            track_vec.reshape(1, -1),
+            self.user_profile.reshape(1, -1)
+        )[0][0])
+
+    def _play_frequency_score(self, track_id) -> float:
+        """Calculate play frequency score."""
+        if self.db is None:
+            return 0.5  # Default if no data available
+
+        # Query implementation as shown earlier
+        # Returns normalized score 0-1
+        pass
+
+    def _diversity_bonus(self, track) -> float:
+        """Calculate diversity bonus."""
+        artist_penalty = sum(
+            1 for t in self.recent_history
+            if t.artist_id == track.artist_id
+        )
+        album_penalty = sum(
+            0.5 for t in self.recent_history
+            if t.album_id == track.album_id
+        )
+        return 1.0 / (1.0 + artist_penalty * 2.0 + album_penalty)
+
+    def _recency_bonus(self, track) -> float:
+        """Calculate recency bonus."""
+        if track.last_played is None:
+            return 1.0
+
+        days = (self.current_time - track.last_played).days
+        if days == 0:
+            return 0.0
+        return 1.0 - min(days / 30, 1.0)
+
+    def _exploration_bonus(self, track_id) -> float:
+        """Calculate exploration bonus."""
+        if self.db is None:
+            return 0.5
+
+        # Query implementation as shown earlier
+        pass
+```
+
+### Caching Strategy
+
+Audio features are static - cache indefinitely:
+
+```python
+# Redis cache key pattern
+AUDIO_FEATURES_KEY = "audio_features:{track_id}"
+AUDIO_FEATURES_TTL = 0  # Permanent (features don't change)
+
+TRACK_METADATA_KEY = "track_metadata:{track_id}"
+TRACK_METADATA_TTL = 86400  # 24 hours
+
+USER_PROFILE_KEY = "user_profile:{user_id}"
+USER_PROFILE_TTL = 3600  # 1 hour (recalculated periodically)
+```
+
+### Performance Considerations
+
+1. **Pre-compute user profiles**: Update hourly via Celery task
+2. **Batch similarity calculations**: Use vectorized operations
+3. **Cache scoring results**: For frequently accessed recommendations
+4. **Limit candidate pool**: Score top 500-1000 candidates, not entire library
+
+---
+
+## Open Questions
+
+### Unresolved Design Decisions
+
+| Question | Options | Recommendation |
+|----------|---------|----------------|
+| **How to handle skipped tracks?** | Negative signal vs ignore | Treat as mild negative signal (reduce score) |
+| **Window for user profile?** | 30/90/365 days | 90 days - balances recency with stability |
+| **Diversity strictness?** | Hard limits vs soft scoring | Soft scoring (more flexible, tunable) |
+| **Cold start for new users?** | Default profile vs random | Default profile based on general Spotify trends |
+| **Track audio features latency?** | Sync vs async fetch | Sync on first access, cache thereafter |
+| **Maximum playlist length?** | 50/100/200 tracks | 100 tracks - reasonable for shuffling |
+
+### Metrics for Evaluation
+
+Track these metrics to tune the algorithm:
+
+1. **Skip Rate**: Lower is better (target < 15%)
+2. **Completion Rate**: Higher is better (target > 70%)
+3. **Repeat Listen Rate**: Measures satisfaction
+4. **Discovery Rate**: New tracks per session (target 10-20%)
+5. **Artist Diversity**: Unique artists per 50 tracks
+
+### A/B Testing Framework
+
+Recommend implementing configurable weight sets:
+
+```python
+WEIGHT_PRESETS = {
+    'balanced': {
+        'play_frequency': 0.35,
+        'audio_similarity': 0.30,
+        'diversity': 0.20,
+        'recency': 0.10,
+        'exploration': 0.05
+    },
+    'familiar': {
+        'play_frequency': 0.50,
+        'audio_similarity': 0.30,
+        'diversity': 0.10,
+        'recency': 0.05,
+        'exploration': 0.05
+    },
+    'discover': {
+        'play_frequency': 0.20,
+        'audio_similarity': 0.25,
+        'diversity': 0.25,
+        'recency': 0.15,
+        'exploration': 0.15
+    }
+}
+```
+
+---
+
+## Appendix: Complete Smart Shuffle Flow
+
+```python
+def smart_shuffle_playlist(
+    candidate_tracks: List[Track],
+    user_id: str,
+    num_tracks: int = 50,
+    db_connection=None
+) -> List[Track]:
+    """
+    Generate a smart-shuffled playlist from candidate tracks.
+
+    This is the main entry point for smart shuffle.
+    """
+    # 1. Calculate user profile
+    user_profile = calculate_user_audio_profile(user_id, db_connection)
+
+    # 2. Get recent history for diversity
+    recent_history = get_recent_plays(user_id, window_minutes=120)
+
+    # 3. Initialize scorer
+    scorer = SmartShuffleScorer(
+        user_profile=user_profile,
+        recent_history=recent_history,
+        db_connection=db_connection
+    )
+
+    # 4. Score all candidates
+    scored_tracks = []
+    for track in candidate_tracks:
+        components = scorer.calculate_score(track)
+        scored_tracks.append((track, components.total_score))
+
+    # 5. Re-rank with MMR for diversity
+    mmr_ranked = mmr_re_rank(
+        [t for t, s in sorted(scored_tracks, key=lambda x: x[1], reverse=True)],
+        selected_tracks=[],
+        lambda_param=0.7
+    )
+
+    # 6. Apply hard constraints (artist diversity)
+    diversified = enforce_artist_diversity(mmr_ranked, max_consecutive_same_artist=1)
+
+    # 7. Select top N with weighted sampling
+    selected = []
+    remaining = diversified[:100]  # Top 100 for sampling
+
+    while len(selected) < num_tracks and remaining:
+        # Create score dict for remaining
+        scores = {t: next(s for _, s in scored_tracks if _ == t) for t in remaining}
+        track_scores = [{'track': t, 'score': s} for t, s in scores.items()]
+
+        # Weighted selection
+        chosen = weighted_selection(track_scores, temperature=1.0)
+        selected.append(chosen['track'])
+        remaining = [t for t in remaining if t != chosen['track']]
+
+    return selected
+```
+
+---
+
+*Last updated: Based on planning documents dated 2024*
+*Status: Design specification - ready for implementation*
