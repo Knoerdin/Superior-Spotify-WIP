@@ -1,0 +1,25 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "permissions": [
+    { "action": "shell", "resource": "*", "effect": "ask" },
+    { "action": "shell", "resource": "git status *", "effect": "allow" },
+    { "action": "shell", "resource": "git log *", "effect": "allow" },
+    { "action": "shell", "resource": "git diff *", "effect": "allow" },
+    { "action": "shell", "resource": "git branch *", "effect": "allow" },
+    { "action": "shell", "resource": "gh *", "effect": "allow" },
+    { "action": "shell", "resource": ".opencode/scripts/*", "effect": "allow" },
+    { "action": "read", "resource": "*.env", "effect": "deny" },
+    { "action": "edit", "resource": ".opencode/state/*", "effect": "deny" },
+    { "action": "webfetch", "resource": "*", "effect": "ask" },
+    { "action": "webfetch", "resource": "https://developer.spotify.com/*", "effect": "allow" }
+  ],
+  "mcp": {
+    "servers": {
+      "gbrain": {
+        "type": "local",
+        "command": ["gbrain", "serve"],
+        "disabled": true
+      }
+    }
+  }
+}

@@ -44,3 +44,6 @@ Thumbs.db
 dist/
 build/
 *.egg-info/
+
+# gstack port: local agent state (per-machine, never commit)
+.opencode/state/
