@@ -1,95 +1,119 @@
 # Superior Spotify
 
-A "nerdy" Spotify-enhanced web app that brings ML capabilities, deep statistics, and social features to your music listening experience.
+A "nerdy" Spotify-enhanced web app. ML-powered smart shuffle, pattern-based playlists, deep listening statistics, and social features.
 
-## Vision
-
-Spotify's default shuffle and recommendations don't always respect your personal preferences, mood, or listening context. Superior Spotify fills that gap with:
-
-- **Smart Shuffle**: Weighted random based on your listening frequency + audio preferences
-- **Pattern-Based Playlists**: Auto-generate playlists based on time of day, mood, listening habits
-- **Deep Statistics**: Track and visualize listening habits beyond what Spotify provides
-- **Social Features**: Share stats, compete with friends, discover through social connections
+Repo: https://github.com/Knoerdin/Superior-Spotify-WIP
 
 ## Project Status
 
-**Early Concept Phase** - This repository contains planning documents and agent configurations. Implementation has not yet started.
+**Planning phase. No implementation exists.**
 
-## Multi-Agent Development System
+- This repository contains planning documents, deep docs, agent configs, and one UI mockup.
+- `frontend/` and `tests/` are empty placeholder directories.
+- There is no `app/`, no `requirements.txt`, no `docker-compose.yml`, no `.env.example`, no `migrations/`.
+- A short-lived backend was removed in commit `a360959` ("Remove backend files").
+- The plan of record for when implementation starts: the 14-week roadmap in `planning/comprehensive-plan.md`.
 
-This project uses a specialized multi-agent system for development. Each agent handles specific aspects:
+## Features
 
-### Core Agents (Direct Write Access)
+Spotify's default shuffle and recommendations do not respect personal preferences for variety, mood, or context. Superior Spotify fills that gap:
 
-| Agent | Purpose |
-|-------|---------|
-| `frontend-design` | UI/UX, dashboard visualizations, responsive design |
-| `backend-server` | FastAPI backend, PostgreSQL database, Redis caching |
-| `ml-features` | ML algorithms, audio similarity, smart shuffle, clustering |
+| Feature | What it does |
+|---|---|
+| **Smart Shuffle** | Weighted shuffle from your listening frequency plus audio feature preferences |
+| **Pattern Playlists** | Auto-generated playlists by time of day, mood, and habits |
+| **Deep Statistics** | Track and visualize listening habits beyond what Spotify shows |
+| **Social** | Compare taste, share stats, connect with friends |
 
-### Support Agents (Proposal Mode)
+One hard constraint shapes all of this: the Spotify API returns only 20 to 50 recently played tracks. The app must self-track every play event into its own database. See `docs/api-integration/spotify.md`.
 
-| Agent | Purpose |
-|-------|---------|
-| `orchestrator` | Primary contact point, coordinates all agents |
-| `backend-debug` | Error diagnosis, performance troubleshooting |
-| `testing-qa` | Unit tests, integration tests, CI/CD |
-| `security` | OAuth security, API authentication, data privacy |
-| `devops` | Docker, deployment (Railway/Render), monitoring |
-| `documentation` | README, API docs, architectural decisions |
-| `data-analytics` | Listening pattern analysis, insights |
-| `mobile-pwa` | Progressive web app, mobile optimization |
-| `api-integration` | Spotify API specialist, rate limiting, caching |
+## Repository Layout
 
-### How to Use the Agent System
-
-For most tasks, start with the **orchestrator** agent - it routes work to the appropriate specialist:
+What exists today:
 
 ```
-/agent orchestrator "I want to implement smart shuffle"
+.
+├── AGENTS.md            # Agent orchestration rules (source of truth for how work happens)
+├── CLAUDE.md            # Project context for Claude Code sessions
+├── QUICKSTART.md        # What exists today, and what to expect next
+├── planning/
+│   ├── comprehensive-plan.md    # Full product plan, ML architecture, 14-week roadmap
+│   ├── architecture.md          # High-level architecture, data flow, open questions
+│   ├── tech-stack.md            # Stack options and rationale (Python-centric)
+│   └── project-structure.md     # Intended directory layout, starter templates
+├── docs/
+│   ├── ml/smart-shuffle.md      # Smart shuffle algorithm spec
+│   ├── backend/foundation.md    # FastAPI, SQLAlchemy, Redis guidance
+│   ├── api-integration/spotify.md  # API limits, caching, self-tracking design
+│   └── security/oauth.md        # OAuth, tokens, JWT, privacy
+├── Sketches/Home Screen sketch.jpg  # Home screen UI mockup
+├── .claude/               # Claude Code agent configs (legacy harness, kept for now)
+└── .opencode/             # OpenCode agents, skills, scripts (per-machine state/ is gitignored)
 ```
 
-The orchestrator will delegate to `ml-features` and `backend-server` as needed.
+Planned layout when implementation begins: `app/` (FastAPI), `ml/`, `utils/`, `tests/`, `migrations/`, `frontend/`, `scripts/`. See `planning/project-structure.md`.
 
-See `.claude/agents/README.md` for detailed agent documentation.
+## Agent System
+
+The **main session is the orchestrator**: it routes work to specialist agents, synthesizes their results, and answers the user. There is no separate orchestrator agent.
+
+Core agents with direct write access:
+
+| Agent | Writes to | Role |
+|---|---|---|
+| `frontend-design` | `frontend/**` | UI, dashboards, Plotly visualizations |
+| `backend-server` | `app/**`, `migrations/**`, `utils/**` | FastAPI, PostgreSQL, Redis, migrations |
+| `ml-features` | `ml/**` | Smart shuffle, similarity, clustering, recommendations |
+
+Proposal-only agents (they propose, never write directly): `backend-debug`, `testing-qa`, `security`, `devops`, `data-analytics`, `mobile-pwa`, `api-integration`, `documentation`.
+
+The rules, skill routing, decision log, learnings, checkpoints, and safety policy live in `AGENTS.md`. Read it first.
 
 ## Technology Stack
 
-| Component | Technology |
-|-----------|------------|
-| Backend | FastAPI (Python) |
-| Database | PostgreSQL |
-| Cache | Redis |
+| Component | Choice |
+|---|---|
+| Backend | Python (FastAPI) |
+| Database | PostgreSQL (SQLAlchemy, Alembic) |
+| Cache / queue | Redis (Celery for background jobs) |
 | ML | scikit-learn, pandas, numpy |
-| Frontend | Next.js/Nuxt with Plotly |
+| Charts | Plotly |
+| Frontend | **Open decision** (below) |
 | Deployment | Railway/Render + Vercel |
 
-## Quick Start (When Implementation Begins)
+**The frontend is an open decision.** The docs disagree:
 
-```bash
-# 1. Set up virtual environment
-python -m venv .venv
-source .venv/bin/activate
+- `planning/tech-stack.md` recommends Option 1: Python-centric, HTMX + Jinja2 or vanilla JS served by FastAPI.
+- `AGENTS.md` and `CLAUDE.md` list Next.js or Nuxt (with Plotly) as the SPA candidate.
+- `planning/project-structure.md` lists Streamlit as the rapid-MVP frontend.
 
-# 2. Install dependencies
-pip install -r requirements.txt
+Do not pick silently. Resolve in `/spec` before any frontend work.
 
-# 3. Start PostgreSQL (Docker)
-docker run --name spotify-db -e POSTGRES_PASSWORD=postgres -p 5432:5432 -d postgres
+## Documentation Index
 
-# 4. Run backend
-uvicorn app.main:app --reload
+| File | Content |
+|---|---|
+| `AGENTS.md` | How agents work here: rules, routing, decision log, safety |
+| `CLAUDE.md` | Project context for Claude Code sessions |
+| `QUICKSTART.md` | Current state, what to expect when implementation begins |
+| `planning/comprehensive-plan.md` | Full product plan, DB schema, feature specs, 14-week roadmap |
+| `planning/architecture.md` | High-level architecture, data flow, Spotify API considerations |
+| `planning/tech-stack.md` | Stack options with rationale |
+| `planning/project-structure.md` | Intended layout, starter code templates |
+| `docs/ml/smart-shuffle.md` | Shuffle scoring, similarity, MMR, bandits, open questions |
+| `docs/backend/foundation.md` | FastAPI structure, SQLAlchemy, indexes, caching, testing |
+| `docs/api-integration/spotify.md` | API capabilities and limits, rate limits, caching, self-tracking |
+| `docs/security/oauth.md` | OAuth flow, token storage, JWT, GDPR, hardening checklist |
+| `.claude/agents/README.md` | Agent system overview (Claude Code harness) |
+| `.claude/agents/CONTEXT.md` | Shared agent context: DB tables, audio features, project stage |
 
-# 5. Open browser
-# http://localhost:8000
-```
+## Newcomer Orientation
 
-## Project Documentation
-
-- **Full Product Plan**: `planning/comprehensive-plan.md`
-- **Architecture Overview**: `planning/architecture.md`
-- **Tech Stack Details**: `planning/tech-stack.md`
-- **Project Structure**: `planning/project-structure.md`
+1. Read `AGENTS.md`. It defines how work happens in this repo.
+2. Read `planning/comprehensive-plan.md`. It is the plan of record.
+3. Read `docs/api-integration/spotify.md`. Self-tracking is the foundation of the product.
+4. Look at `Sketches/Home Screen sketch.jpg` for the intended home screen.
+5. Ready to build: run `/spec` to lock the open decisions (frontend, schema counts, capture method).
 
 ## References
 
